@@ -1,28 +1,33 @@
-import { NextResponse } from "next/server"
-import Stripe from "stripe"
-import { prisma } from "@/lib/prisma"
+import { NextResponse } from "next/server";
+import Stripe from "stripe";
+import { prisma } from "@/lib/prisma";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2023-10-16",
-})
+});
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
 
 export async function POST(request: Request) {
-  const body = await request.text()
-  const signature = request.headers.get("stripe-signature") as string
+  const body = await request.text();
+  const signature = request.headers.get("stripe-signature") as string;
 
-  let event: Stripe.Event
+  let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
+    event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
   } catch (error: any) {
-    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 })
+    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 });
   }
 
   // Handle the event
   if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session
+    const session = event.data.object as Stripe.Checkout.Session;
+
+    if (!session.metadata?.userId) {
+      console.error("Missing userId in session metadata");
+      return new NextResponse("Missing userId", { status: 400 });
+    }
 
     // Update user's plan
     if (session.metadata?.userId) {
@@ -35,20 +40,25 @@ export async function POST(request: Request) {
           stripeCustomerId: session.customer as string,
           stripeSubscriptionId: session.subscription as string,
         },
-      })
+      });
     }
   }
 
   // Handle subscription cancelled/updated
   if (event.type === "customer.subscription.deleted") {
-    const subscription = event.data.object as Stripe.Subscription
+    const subscription = event.data.object as Stripe.Subscription;
+
+    if (!subscription.id) {
+      console.error("Missing subscription ID");
+      return new NextResponse("Missing subscription ID", { status: 400 });
+    }
 
     // Find user with this subscription
     const user = await prisma.user.findFirst({
       where: {
         stripeSubscriptionId: subscription.id,
       },
-    })
+    });
 
     if (user) {
       await prisma.user.update({
@@ -58,16 +68,11 @@ export async function POST(request: Request) {
         data: {
           plan: "FREE",
         },
-      })
+      });
     }
   }
 
-  return new NextResponse(null, { status: 200 })
+  return new NextResponse(null, { status: 200 });
 }
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-  runtime: "nodejs",
-}
+export const runtime = "nodejs";
